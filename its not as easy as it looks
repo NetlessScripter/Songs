@@ -1,0 +1,576 @@
+
+local rs = game:GetService("RunService")
+if not rs:IsClient() then return end
+
+local lp = game:GetService("Players").LocalPlayer
+local c = lp.Character or lp.CharacterAdded:Wait()
+
+local src
+if not pcall(function() src = game:GetService("ReplicatedStorage").AssetTemplates.PresetAttachments["Flash 1"] end) or not src then return end
+
+local emitterProps = {
+	"Brightness","Color","LightEmission","LightInfluence","Orientation","Size","Squash",
+	"Texture","Transparency","ZOffset","EmissionDirection","Enabled","Lifetime","Rate",
+	"RotSpeed","Rotation","Speed","SpreadAngle","TimeScale","Acceleration","Drag",
+	"VelocityInheritance","WindAffectsDrag","Shape","ShapeInOut","ShapePartial","ShapeStyle",
+	"FlipbookFramerate","FlipbookLayout","FlipbookMode","FlipbookStartRandom",
+	"LockedToPart","FaceCamera","Name"
+}
+
+local trailProps = {
+	"Brightness","Color","Enabled","FaceCamera",
+	"Lifetime","LightEmission","LightInfluence","MaxLength","MinLength",
+	"Texture","TextureLength","TextureMode","Transparency","WidthScale","Name"
+}
+
+local modelProps = {
+	"Name","LevelOfDetail","ModelLod"
+}
+
+local basePartProps = {
+	"Name","Size","CFrame","Color","Material","Transparency","Reflectance",
+	"Anchored","CanCollide","CanTouch","CanQuery","CastShadow","Massless",
+	"LocalTransparencyModifier"
+}
+
+local meshPartProps = {
+	"Name","Size","CFrame","Color","Material","Transparency","Reflectance",
+	"Anchored","CanCollide","CanTouch","CanQuery","CastShadow","Massless",
+	"MeshId","TextureID","DoubleSided"
+}
+
+local specialMeshProps = {
+	"Name","MeshId","TextureId","Scale","Offset","MeshType","VertexColor"
+}
+
+local surfaceAppearanceProps = {
+	"Name","AlphaMode","ColorMap","MetalnessMap","NormalMap","RoughnessMap","TexturePack"
+}
+
+local decalProps = {
+	"Name","Texture","Face","Color3","Transparency","ZIndex"
+}
+
+local billboardGuiProps = {
+	"Name","Size","StudsOffset","AlwaysOnTop","Enabled","LightInfluence","MaxDistance","SizeOffset"
+}
+
+local textLabelProps = {
+	"Name","Text","TextColor3","BackgroundColor3","BackgroundTransparency","TextTransparency",
+	"Font","TextSize","TextScaled","TextWrapped","RichText","Size","Position","AnchorPoint","ZIndex"
+}
+
+local imageProps = {
+	"Name","Image","ImageColor3","ImageTransparency","BackgroundColor3","BackgroundTransparency",
+	"ScaleType","Size","Position","AnchorPoint","ZIndex","SliceCenter","TileSize"
+}
+
+local weldProps = {
+	"Name","C0","C1"
+}
+
+local motorProps = {
+	"Name","C0","C1","MaxVelocity","DesiredAngle"
+}
+
+local pointLightProps = {
+	"Name","Brightness","Color","Range","Enabled","Shadows"
+}
+
+local spotLightProps = {
+	"Name","Brightness","Color","Range","Angle","Face","Enabled","Shadows"
+}
+
+local surfaceLightProps = {
+	"Name","Brightness","Color","Range","Angle","Face","Enabled","Shadows"
+}
+
+local selectionBoxProps = {
+	"Name","Color3","LineThickness","SurfaceColor3","SurfaceTransparency"
+}
+
+local beamProps = {
+	"Name","Attachment0","Attachment1","Color","CurveSize0","CurveSize1","Enabled",
+	"FaceCamera","LightEmission","LightInfluence","Segments","Texture","TextureLength",
+	"TextureMode","TextureSpeed","Transparency","Width0","Width1","ZOffset"
+}
+
+local function vStr(v)
+	local t = typeof(v)
+	if t == "string" then
+		return string.format("%q", v)
+	elseif t == "boolean" then
+		return tostring(v)
+	elseif t == "number" then
+		if v == math.huge then return "math.huge"
+		elseif v == -math.huge then return "-math.huge"
+		elseif v ~= v then return "0/0"
+		else return string.format("%.17g", v) end
+	elseif t == "Color3" then
+		return ("Color3.new(%.17g,%.17g,%.17g)"):format(v.R,v.G,v.B)
+	elseif t == "Vector3" then
+		return ("Vector3.new(%.17g,%.17g,%.17g)"):format(v.X,v.Y,v.Z)
+	elseif t == "Vector2" then
+		return ("Vector2.new(%.17g,%.17g)"):format(v.X,v.Y)
+	elseif t == "CFrame" then
+		local cf = {v:GetComponents()}
+		local f = {}
+		for i,val in ipairs(cf) do f[i] = string.format("%.17g",val) end
+		return "CFrame.new("..table.concat(f,",")..")"
+	elseif t == "UDim2" then
+		return ("UDim2.new(%.17g,%.17g,%.17g,%.17g)"):format(v.X.Scale,v.X.Offset,v.Y.Scale,v.Y.Offset)
+	elseif t == "UDim" then
+		return ("UDim.new(%.17g,%.17g)"):format(v.Scale,v.Offset)
+	elseif t == "NumberRange" then
+		return ("NumberRange.new(%.17g,%.17g)"):format(v.Min,v.Max)
+	elseif t == "NumberSequence" then
+		local pts = {}
+		for _,k in ipairs(v.Keypoints) do
+			table.insert(pts,("NumberSequenceKeypoint.new(%.17g,%.17g,%.17g)"):format(k.Time,k.Value,k.Envelope))
+		end
+		return "NumberSequence.new({"..table.concat(pts,",").."})"
+	elseif t == "ColorSequence" then
+		local pts = {}
+		for _,k in ipairs(v.Keypoints) do
+			table.insert(pts,("ColorSequenceKeypoint.new(%.17g,Color3.new(%.17g,%.17g,%.17g))"):format(k.Time,k.Value.R,k.Value.G,k.Value.B))
+		end
+		return "ColorSequence.new({"..table.concat(pts,",").."})"
+	elseif t == "EnumItem" then
+		return tostring(v)
+	elseif t == "Rect" then
+		return ("Rect.new(%.17g,%.17g,%.17g,%.17g)"):format(v.Min.X,v.Min.Y,v.Max.X,v.Max.Y)
+	elseif t == "BrickColor" then
+		return ("BrickColor.new(%q)"):format(tostring(v))
+	elseif t == "Faces" then
+		return nil
+	else
+		return nil
+	end
+end
+
+local emitters = {}
+local trails = {}
+local models = {}
+
+local function scanObj(obj)
+	if obj:IsA("ParticleEmitter") then
+		table.insert(emitters, obj)
+	elseif obj:IsA("Trail") then
+		table.insert(trails, obj)
+	elseif obj:IsA("Model") then
+		table.insert(models, obj)
+	end
+	for _,child in ipairs(obj:GetChildren()) do
+		scanObj(child)
+	end
+end
+
+if src:IsA("ParticleEmitter") or src:IsA("Trail") or src:IsA("Model") then
+	scanObj(src)
+else
+	for _,obj in ipairs(src:GetDescendants()) do
+		if obj:IsA("ParticleEmitter") then
+			table.insert(emitters, obj)
+		elseif obj:IsA("Trail") then
+			table.insert(trails, obj)
+		elseif obj:IsA("Model") then
+			table.insert(models, obj)
+		end
+	end
+end
+
+if #emitters == 0 and #trails == 0 and #models == 0 then return end
+
+local trailAttPositions = {}
+for _, trail in ipairs(trails) do
+	local a0pos = Vector3.new(0, 0.5, 0)
+	local a1pos = Vector3.new(0, -0.5, 0)
+	pcall(function()
+		local a0 = trail.Attachment0
+		if a0 and a0:IsA("Attachment") then
+			a0pos = a0.Position
+		end
+	end)
+	pcall(function()
+		local a1 = trail.Attachment1
+		if a1 and a1:IsA("Attachment") then
+			a1pos = a1.Position
+		end
+	end)
+	trailAttPositions[trail] = {a0pos, a1pos}
+end
+
+local s = {}
+
+local function writeProps(lines, varName, obj, props)
+	for _, prop in ipairs(props) do
+		if prop ~= "Name" then
+			local ok, val = pcall(function() return obj[prop] end)
+			if ok and val ~= nil then
+				local sv = vStr(val)
+				if sv then
+					table.insert(lines, varName.."."..prop.."="..sv.."\n")
+				end
+			end
+		end
+	end
+end
+
+local function getVarName(idx)
+	return "obj"..idx
+end
+
+local objCounter = {0}
+local function newVar()
+	objCounter[1] = objCounter[1] + 1
+	return "obj"..objCounter[1]
+end
+
+local function serializeAttachments(lines, obj, parentVar)
+	for _, child in ipairs(obj:GetChildren()) do
+		if child:IsA("Attachment") then
+			local av = newVar()
+			table.insert(lines, "local "..av.."=Instance.new('Attachment')\n")
+			local ok, pos = pcall(function() return child.Position end)
+			if ok then table.insert(lines, av..".Position="..vStr(pos).."\n") end
+			local ok2, ori = pcall(function() return child.Orientation end)
+			if ok2 then table.insert(lines, av..".Orientation="..vStr(ori).."\n") end
+			local ok3, name = pcall(function() return child.Name end)
+			if ok3 then table.insert(lines, av..".Name="..vStr(name).."\n") end
+			table.insert(lines, av..".Parent="..parentVar.."\n")
+		end
+	end
+end
+
+local function serializeModelChildren(lines, obj, parentVar, modelCF)
+	for _, child in ipairs(obj:GetChildren()) do
+		if child:IsA("MeshPart") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('MeshPart')\n")
+			writeProps(lines, v, child, meshPartProps)
+			local ok, cf = pcall(function() return child.CFrame end)
+			if ok then
+				local relCF = modelCF:Inverse() * cf
+				table.insert(lines, v..".CFrame=anchorCF*"..vStr(relCF).."\n")
+			end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeAttachments(lines, child, v)
+			serializeModelChildren(lines, child, v, modelCF)
+		elseif child:IsA("UnionOperation") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('UnionOperation')\n")
+			writeProps(lines, v, child, basePartProps)
+			local ok, cf = pcall(function() return child.CFrame end)
+			if ok then
+				local relCF = modelCF:Inverse() * cf
+				table.insert(lines, v..".CFrame=anchorCF*"..vStr(relCF).."\n")
+			end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeAttachments(lines, child, v)
+			serializeModelChildren(lines, child, v, modelCF)
+		elseif child:IsA("Part") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Part')\n")
+			writeProps(lines, v, child, basePartProps)
+			local ok, cf = pcall(function() return child.CFrame end)
+			if ok then
+				local relCF = modelCF:Inverse() * cf
+				table.insert(lines, v..".CFrame=anchorCF*"..vStr(relCF).."\n")
+			end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeAttachments(lines, child, v)
+			serializeModelChildren(lines, child, v, modelCF)
+		elseif child:IsA("SpecialMesh") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SpecialMesh')\n")
+			writeProps(lines, v, child, specialMeshProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("SurfaceAppearance") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SurfaceAppearance')\n")
+			writeProps(lines, v, child, surfaceAppearanceProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("Decal") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Decal')\n")
+			writeProps(lines, v, child, decalProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("Texture") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Texture')\n")
+			writeProps(lines, v, child, decalProps)
+			local ok2, ts = pcall(function() return child.StudsPerTileU end)
+			if ok2 then table.insert(lines, v..".StudsPerTileU="..vStr(ts).."\n") end
+			local ok3, tv = pcall(function() return child.StudsPerTileV end)
+			if ok3 then table.insert(lines, v..".StudsPerTileV="..vStr(tv).."\n") end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("PointLight") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('PointLight')\n")
+			writeProps(lines, v, child, pointLightProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("SpotLight") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SpotLight')\n")
+			writeProps(lines, v, child, spotLightProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("SurfaceLight") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SurfaceLight')\n")
+			writeProps(lines, v, child, surfaceLightProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("ParticleEmitter") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('ParticleEmitter')\n")
+			writeProps(lines, v, child, emitterProps)
+			table.insert(lines, v..":Emit(15)\n")
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("Trail") then
+			local v = newVar()
+			local a0v = newVar()
+			local a1v = newVar()
+			local a0pos = Vector3.new(0, 0.5, 0)
+			local a1pos = Vector3.new(0, -0.5, 0)
+			pcall(function()
+				local a0 = child.Attachment0
+				if a0 and a0:IsA("Attachment") then a0pos = a0.Position end
+			end)
+			pcall(function()
+				local a1 = child.Attachment1
+				if a1 and a1:IsA("Attachment") then a1pos = a1.Position end
+			end)
+			table.insert(lines, "local "..a0v.."=Instance.new('Attachment')\n")
+			table.insert(lines, a0v..".Position="..vStr(a0pos).."\n")
+			table.insert(lines, a0v..".Parent="..parentVar.."\n")
+			table.insert(lines, "local "..a1v.."=Instance.new('Attachment')\n")
+			table.insert(lines, a1v..".Position="..vStr(a1pos).."\n")
+			table.insert(lines, a1v..".Parent="..parentVar.."\n")
+			table.insert(lines, "local "..v.."=Instance.new('Trail')\n")
+			writeProps(lines, v, child, trailProps)
+			table.insert(lines, v..".Attachment0="..a0v.."\n")
+			table.insert(lines, v..".Attachment1="..a1v.."\n")
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("WeldConstraint") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('WeldConstraint')\n")
+			local ok, name = pcall(function() return child.Name end)
+			if ok then table.insert(lines, v..".Name="..vStr(name).."\n") end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("Motor6D") or child:IsA("Weld") then
+			local className = child.ClassName
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('"..className.."')\n")
+			writeProps(lines, v, child, motorProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("SelectionBox") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SelectionBox')\n")
+			writeProps(lines, v, child, selectionBoxProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		elseif child:IsA("Attachment") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Attachment')\n")
+			local ok, pos = pcall(function() return child.Position end)
+			if ok then table.insert(lines, v..".Position="..vStr(pos).."\n") end
+			local ok2, ori = pcall(function() return child.Orientation end)
+			if ok2 then table.insert(lines, v..".Orientation="..vStr(ori).."\n") end
+			local ok3, name = pcall(function() return child.Name end)
+			if ok3 then table.insert(lines, v..".Name="..vStr(name).."\n") end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeModelChildren(lines, child, v, modelCF)
+		elseif child:IsA("Model") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Model')\n")
+			writeProps(lines, v, child, modelProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			local subCF = modelCF
+			pcall(function()
+				local pp = child.PrimaryPart
+				if pp then subCF = pp.CFrame end
+			end)
+			serializeModelChildren(lines, child, v, subCF)
+		elseif child:IsA("BillboardGui") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('BillboardGui')\n")
+			writeProps(lines, v, child, billboardGuiProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeGuiChildren(lines, child, v)
+		elseif child:IsA("SurfaceGui") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('SurfaceGui')\n")
+			local ok, face = pcall(function() return child.Face end)
+			if ok then table.insert(lines, v..".Face="..vStr(face).."\n") end
+			local ok2, en = pcall(function() return child.Enabled end)
+			if ok2 then table.insert(lines, v..".Enabled="..vStr(en).."\n") end
+			local ok3, name = pcall(function() return child.Name end)
+			if ok3 then table.insert(lines, v..".Name="..vStr(name).."\n") end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+		end
+	end
+end
+
+local function serializeGuiChildren(lines, obj, parentVar)
+	for _, child in ipairs(obj:GetChildren()) do
+		if child:IsA("TextLabel") or child:IsA("TextButton") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('"..child.ClassName.."')\n")
+			writeProps(lines, v, child, textLabelProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeGuiChildren(lines, child, v)
+		elseif child:IsA("ImageLabel") or child:IsA("ImageButton") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('"..child.ClassName.."')\n")
+			writeProps(lines, v, child, imageProps)
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeGuiChildren(lines, child, v)
+		elseif child:IsA("Frame") then
+			local v = newVar()
+			table.insert(lines, "local "..v.."=Instance.new('Frame')\n")
+			local ok, name = pcall(function() return child.Name end)
+			if ok then table.insert(lines, v..".Name="..vStr(name).."\n") end
+			local ok2, size = pcall(function() return child.Size end)
+			if ok2 then table.insert(lines, v..".Size="..vStr(size).."\n") end
+			local ok3, pos = pcall(function() return child.Position end)
+			if ok3 then table.insert(lines, v..".Position="..vStr(pos).."\n") end
+			local ok4, bg = pcall(function() return child.BackgroundColor3 end)
+			if ok4 then table.insert(lines, v..".BackgroundColor3="..vStr(bg).."\n") end
+			local ok5, bt = pcall(function() return child.BackgroundTransparency end)
+			if ok5 then table.insert(lines, v..".BackgroundTransparency="..vStr(bt).."\n") end
+			table.insert(lines, v..".Parent="..parentVar.."\n")
+			serializeGuiChildren(lines, child, v)
+		end
+	end
+end
+
+table.insert(s,"local lp=game:GetService('Players').LocalPlayer\n")
+table.insert(s,"local c=lp.Character or lp.CharacterAdded:Wait()\n")
+table.insert(s,"local isR15=c:FindFirstChild('UpperTorso')~=nil\n")
+table.insert(s,"local R15={'Head','UpperTorso','LowerTorso','LeftUpperArm','LeftLowerArm','LeftHand','RightUpperArm','RightLowerArm','RightHand','LeftUpperLeg','LeftLowerLeg','LeftFoot','RightUpperLeg','RightLowerLeg','RightFoot','HumanoidRootPart'}\n")
+table.insert(s,"local R6={'Head','Torso','Left Arm','Right Arm','Left Leg','Right Leg','HumanoidRootPart'}\n")
+table.insert(s,"local parts={}\n")
+table.insert(s,"for _,n in ipairs(isR15 and R15 or R6) do local p=c:FindFirstChild(n) if p and p:IsA('BasePart') then parts[#parts+1]=p end end\n")
+
+if #models > 0 then
+	table.insert(s,"local hrp=c:FindFirstChild('HumanoidRootPart')\n")
+	table.insert(s,"if hrp then\n")
+	for _, model in ipairs(models) do
+		local modelLines = {}
+		local mv = newVar()
+		table.insert(modelLines, "do\n")
+		table.insert(modelLines, "local anchorCF=hrp.CFrame\n")
+		table.insert(modelLines, "local "..mv.."=Instance.new('Model')\n")
+		writeProps(modelLines, mv, model, modelProps)
+
+		local modelCF = CFrame.new(0,0,0)
+		pcall(function()
+			local pp = model.PrimaryPart
+			if pp then
+				modelCF = pp.CFrame
+			else
+				modelCF = model:GetPivot()
+			end
+		end)
+
+		serializeModelChildren(modelLines, model, mv, modelCF)
+
+		local okPP = false
+		local ppName = ""
+		pcall(function()
+			local pp = model.PrimaryPart
+			if pp then
+				okPP = true
+				ppName = pp.Name
+			end
+		end)
+		if okPP and ppName ~= "" then
+			table.insert(modelLines, "local _pp="..mv..":FindFirstChild("..vStr(ppName)..")\n")
+			table.insert(modelLines, "if _pp then "..mv..".PrimaryPart=_pp end\n")
+		end
+
+		table.insert(modelLines, mv..".Parent=hrp\n")
+		table.insert(modelLines, "end\n")
+
+		for _, line in ipairs(modelLines) do
+			table.insert(s, line)
+		end
+	end
+	table.insert(s,"end\n")
+end
+
+table.insert(s,"for _,part in ipairs(parts) do\n")
+
+for _, trail in ipairs(trails) do
+	local attData = trailAttPositions[trail]
+	local a0pos = attData[1]
+	local a1pos = attData[2]
+
+	table.insert(s,"do\n")
+	table.insert(s,"local a0=Instance.new('Attachment')\n")
+	table.insert(s,"a0.Position="..vStr(a0pos).."\n")
+	table.insert(s,"a0.Parent=part\n")
+	table.insert(s,"local a1=Instance.new('Attachment')\n")
+	table.insert(s,"a1.Position="..vStr(a1pos).."\n")
+	table.insert(s,"a1.Parent=part\n")
+	table.insert(s,"local t=Instance.new('Trail')\n")
+	for _, prop in ipairs(trailProps) do
+		if prop ~= "Name" then
+			local ok, val = pcall(function() return trail[prop] end)
+			if ok and val ~= nil then
+				local sv = vStr(val)
+				if sv then
+					table.insert(s,"t."..prop.."="..sv.."\n")
+				end
+			end
+		end
+	end
+	table.insert(s,"t.Enabled=true\n")
+	local okT, transVal = pcall(function() return trail.Transparency end)
+	if okT and transVal then
+		local kps = transVal.Keypoints
+		local allOpaque = true
+		for _, kp in ipairs(kps) do
+			if kp.Value < 0.8 then allOpaque = false break end
+		end
+		if allOpaque then
+			table.insert(s,"t.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0,0),NumberSequenceKeypoint.new(1,1,0)})\n")
+		end
+	end
+	local okC, colorVal = pcall(function() return trail.Color end)
+	if okC and colorVal then
+		local sv = vStr(colorVal)
+		if sv then
+			table.insert(s,"t.Color="..sv.."\n")
+		end
+	end
+	local okTL, tlVal = pcall(function() return trail.TextureLength end)
+	if okTL and tlVal ~= nil then
+		table.insert(s,"t.TextureLength="..vStr(tlVal).."\n")
+	end
+	table.insert(s,"t.Attachment0=a0\n")
+	table.insert(s,"t.Attachment1=a1\n")
+	table.insert(s,"t.Parent=part\n")
+	table.insert(s,"end\n")
+end
+
+for _, emitter in ipairs(emitters) do
+	table.insert(s,"do\n")
+	table.insert(s,"local e=Instance.new('ParticleEmitter')\n")
+	for _, prop in ipairs(emitterProps) do
+		if prop ~= "Name" then
+			local ok, val = pcall(function() return emitter[prop] end)
+			if ok and val ~= nil then
+				local sv = vStr(val)
+				if sv then
+					table.insert(s,"e."..prop.."="..sv.."\n")
+				end
+			end
+		end
+	end
+	table.insert(s,"e:Emit(15)\n")
+	table.insert(s,"e.Parent=part\n")
+	table.insert(s,"end\n")
+end
+
+table.insert(s,"end\n")
+
+setclipboard(table.concat(s))
