@@ -1020,6 +1020,7 @@ local TELEPORT_TO_EDGE = true   -- snap the HRP to the exact edge point before l
 local CHECK_RATE      = 0.05    -- seconds between edge checks (perf throttle)
 local FOOTPRINT_SLOP  = 0.5     -- studs of leeway for "am I still over this part"
 local LEAP_ANIMATION_ID = "rbxassetid://94758840679955"
+local LEAP_LOCK_TIMEOUT = 5       -- failsafe: seconds before other anims are unblocked no matter what
 local LEAP_SOUND_IDS = {
     "rbxassetid://10760305528", -- Audio/punchimpact (1)
     "rbxassetid://10772477548", -- Audio/strongpunchimpact
@@ -1057,7 +1058,9 @@ stroke.Parent = leapButton
 
 -- ===== STATE =====
 local currentEdgeInfo = nil -- {part, worldPos, outwardDir}
-local leapAnimTrack = nil -- loaded per-character in onCharacterAdded
+local leapAnimData = nil -- decoded Animator6D JSON, loaded once at startup
+local leapLockId = 0
+local realAnimator6D = nil -- stashed real Animator6D while other anims are blocked
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -1111,6 +1114,50 @@ local function getEdgeInfo(hrp)
     }
 end
 
+-- Plays the leap anim and swallows every other Animator6D call until it
+-- finishes (Animation.Completed) or LEAP_LOCK_TIMEOUT passes, whichever is first.
+local function unlockAnims(id)
+    if id ~= leapLockId or not realAnimator6D then return end
+    getgenv().Animator6D = realAnimator6D
+    realAnimator6D = nil
+end
+
+local function playLeapAnim()
+    local play = realAnimator6D or getgenv().Animator6D
+    if not leapAnimData or not play then return end
+
+    -- The module never clears a finished anim, so on the 2nd play it "stops" the
+    -- old one AFTER suppressing Animate, and that old completion callback turns
+    -- Animate back on mid-leap (default anims fight the leap = weird pose).
+    -- Clearing it first makes that happen harmlessly before the new anim starts.
+    if getgenv().Animator6DStop then
+        pcall(getgenv().Animator6DStop)
+    end
+
+    leapLockId += 1
+    local id = leapLockId
+
+    if not realAnimator6D then
+        realAnimator6D = play
+        getgenv().Animator6D = function() end
+    end
+
+    local conn
+    conn = getgenv().Animation.Completed:Connect(function()
+        conn:Disconnect()
+        unlockAnims(id)
+    end)
+    task.delay(LEAP_LOCK_TIMEOUT, function()
+        conn:Disconnect()
+        unlockAnims(id)
+    end)
+
+    if not pcall(play, leapAnimData, 1, false) then
+        conn:Disconnect()
+        unlockAnims(id)
+    end
+end
+
 local function performLeap()
     local info = currentEdgeInfo
     local character = player.Character
@@ -1141,9 +1188,7 @@ local function performLeap()
     humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
     hrp.AssemblyLinearVelocity = (launchDir * FORWARD_BOOST) + Vector3.new(0, verticalSpeed, 0)
 
-    if leapAnimTrack then
-        leapAnimTrack:Play()
-    end
+    playLeapAnim()
 
     for _, soundId in ipairs(LEAP_SOUND_IDS) do
         local sound = Instance.new("Sound")
@@ -1159,46 +1204,40 @@ end
 
 leapButton.MouseButton1Click:Connect(performLeap)
 
--- ===== PER-CHARACTER SETUP =====
-local function onCharacterAdded(character)
+-- ===== LEAP ANIM (Animator6D JSON) =====
 local HttpService = game:GetService("HttpService")
 
-local function PlayAnimator6DFromCache()
+task.spawn(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"))()
 
-loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"))()
+    local CACHE_URL = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/anim6d_kfcache_129827166392763.json"
+    local CACHE_FILE = "anim6d_kfcache_129827166392763.json"
 
-local CACHE_URL = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/anim6d_kfcache_129827166392763.json"
-local CACHE_FILE = "anim6d_kfcache_129827166392763.json"
-
-local jsonBody
-
-if isfile and isfile(CACHE_FILE) then
-    local ok, raw = pcall(readfile, CACHE_FILE)
-    if ok and raw and #raw > 100 then
-        jsonBody = raw
+    local jsonBody
+    if isfile and isfile(CACHE_FILE) then
+        local ok, raw = pcall(readfile, CACHE_FILE)
+        if ok and raw and #raw > 100 then jsonBody = raw end
     end
-end
 
-if not jsonBody then
-    local ok, body = pcall(function()
-        return game:HttpGet(CACHE_URL)
-    end)
-    if ok and body and #body > 100 then
-        jsonBody = body
-        if writefile then
-            writefile(CACHE_FILE, body)
+    if not jsonBody then
+        local ok, body = pcall(function() return game:HttpGet(CACHE_URL) end)
+        if ok and body and #body > 100 then
+            jsonBody = body
+            if writefile then writefile(CACHE_FILE, body) end
+        else
+            warn("Leap anim JSON failed to fetch")
+            return
         end
-    else
-        error("Animator6D failed to fetch JSON")
     end
-end
 
-local animatorData = HttpService:JSONDecode(jsonBody)
-Animator6D(animatorData)
+    leapAnimData = HttpService:JSONDecode(jsonBody)
+end)
 
-end
-
-PlayAnimator6DFromCache()
+-- ===== PER-CHARACTER SETUP =====
+local function onCharacterAdded(character)
+    local hrp = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:WaitForChild("Humanoid")
+    rayParams.FilterDescendantsInstances = {character}
 
     local accumulated = 0
     local heartbeatConn
