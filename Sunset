@@ -1161,14 +1161,44 @@ leapButton.MouseButton1Click:Connect(performLeap)
 
 -- ===== PER-CHARACTER SETUP =====
 local function onCharacterAdded(character)
-    local hrp = character:WaitForChild("HumanoidRootPart")
-    local humanoid = character:WaitForChild("Humanoid")
-    rayParams.FilterDescendantsInstances = { character }
+local HttpService = game:GetService("HttpService")
 
-    local animator = humanoid:WaitForChild("Animator")
-    local animation = Instance.new("Animation")
-    animation.AnimationId = LEAP_ANIMATION_ID
-    leapAnimTrack = animator:LoadAnimation(animation)
+local function PlayAnimator6DFromCache()
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/NetlessScripter/Universal-KJ-Port/refs/heads/main/Animation%20Module"))()
+
+local CACHE_URL = "https://raw.githubusercontent.com/ChosenSkibidi/Goku-Update-Testing-/refs/heads/main/anim6d_kfcache_129827166392763.json"
+local CACHE_FILE = "anim6d_kfcache_129827166392763.json"
+
+local jsonBody
+
+if isfile and isfile(CACHE_FILE) then
+    local ok, raw = pcall(readfile, CACHE_FILE)
+    if ok and raw and #raw > 100 then
+        jsonBody = raw
+    end
+end
+
+if not jsonBody then
+    local ok, body = pcall(function()
+        return game:HttpGet(CACHE_URL)
+    end)
+    if ok and body and #body > 100 then
+        jsonBody = body
+        if writefile then
+            writefile(CACHE_FILE, body)
+        end
+    else
+        error("Animator6D failed to fetch JSON")
+    end
+end
+
+local animatorData = HttpService:JSONDecode(jsonBody)
+Animator6D(animatorData)
+
+end
+
+PlayAnimator6DFromCache()
 
     local accumulated = 0
     local heartbeatConn
