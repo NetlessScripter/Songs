@@ -1,47 +1,298 @@
+--==============================================================================
+-- SUNSET QUALITY SYSTEM
+--
+-- Three states: "Max" (the original settings), "Medium" (roughly 50% of Max,
+-- meant for mid-range devices) and "Performance" (very low). The skybox is NOT
+-- part of any preset - it is always created and re-attached on every apply.
+--
+-- Control it from outside this script through _G.SunsetQuality:
+--
+--   _G.SunsetQuality.Set("Medium")                  -- switch state
+--   _G.SunsetQuality.Get()                          -- current state name
+--   _G.SunsetQuality.Override("Clouds.Tallness", 12)-- tweak one value on top of the state
+--   _G.SunsetQuality.Override("Clouds.Tallness")    -- (no value) remove that override
+--   _G.SunsetQuality.ClearOverrides()
+--   _G.SunsetQuality.GetSettings()                  -- fully resolved settings (a copy)
+--   _G.SunsetQuality.Presets.Medium.Effects.Bloom.Size = 8; _G.SunsetQuality.Reapply()
+--   _G.SunsetQuality.Changed:Connect(function(stateName) end)
+--
+-- To pick the starting state, run  _G.SunsetQualityState = "Medium"  BEFORE
+-- this script. Set() clears overrides unless you pass true as 2nd argument.
+--==============================================================================
+
 local l = game:GetService('Lighting')
 
-local inst = Instance.new("ColorCorrectionEffect")
-inst.Name   = "ColorCorrection"
-inst.Brightness = 0
-inst.Contrast = 0.20999999344348907
-inst.Enabled = true
-inst.Saturation = 0.65
-inst.TintColor = Color3.fromRGB(255, 239, 249)
-inst.Parent = l
+local Quality = {}
+
+local Presets = {
+	----------------------------------------------------------------- MAX
+	Max = {
+		Graphics = { SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel10 },
+		Lighting = {
+			GlobalShadows = true,
+			PrioritizeLightingQuality = true,
+			-- Low-angle sun: slightly softened, but still fairly crisp penumbra.
+			ShadowSoftness = 0.28,
+			EnvironmentDiffuseScale = 0.1,
+			LightingStyle = Enum.LightingStyle.Realistic,
+		},
+		Effects = {
+			ColorCorrection = { Enabled = true },
+			SunRays = { Enabled = true, Intensity = 15, Spread = 10 },
+			DepthOfField = { Enabled = false },
+			Bloom = { Enabled = true, Intensity = 1, Size = 25 },
+			Atmosphere = { Density = 0.3, Offset = 1, Glare = 0.32, Haze = 1 },
+		},
+		LensFlare = {
+			Enabled = true,
+			RaycastSamples = 4,
+			EmitterFraction = 1, -- share of each flare's emitters that are used
+			ObstructionInterval = 1, -- re-raycast every N frames
+		},
+		Clouds = {
+			Tallness = 40,
+			Density = 0.2,
+			ShadowCast = true,
+			RenderFidelity = Enum.RenderFidelity.Precise,
+		},
+	},
+
+	--------------------------------------------------------------- MEDIUM
+	Medium = {
+		Graphics = { SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel5 },
+		Lighting = {
+			GlobalShadows = true,
+			PrioritizeLightingQuality = false,
+			ShadowSoftness = 0.14,
+			EnvironmentDiffuseScale = 0.05,
+			LightingStyle = Enum.LightingStyle.Realistic,
+		},
+		Effects = {
+			ColorCorrection = { Enabled = true },
+			-- Max's Intensity (15) is above the 0-1 range Roblox uses, so this is
+			-- half of the effective maximum (1).
+			SunRays = { Enabled = true, Intensity = 0.5, Spread = 5 },
+			DepthOfField = { Enabled = false },
+			Bloom = { Enabled = true, Intensity = 0.5, Size = 12.5 },
+			Atmosphere = { Density = 0.15, Offset = 0.5, Glare = 0.16, Haze = 0.5 },
+		},
+		LensFlare = {
+			Enabled = true,
+			RaycastSamples = 2,
+			EmitterFraction = 0.5,
+			ObstructionInterval = 2,
+		},
+		Clouds = {
+			Tallness = 20,
+			Density = 0.2,
+			ShadowCast = true,
+			RenderFidelity = Enum.RenderFidelity.Automatic,
+		},
+	},
+
+	---------------------------------------------------------- PERFORMANCE
+	Performance = {
+		Graphics = { SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1 },
+		Lighting = {
+			GlobalShadows = false,
+			PrioritizeLightingQuality = false,
+			ShadowSoftness = 0,
+			EnvironmentDiffuseScale = 0,
+			LightingStyle = Enum.LightingStyle.Soft,
+		},
+		Effects = {
+			ColorCorrection = { Enabled = true }, -- basically free, keeps the look
+			SunRays = { Enabled = false, Intensity = 0, Spread = 0 },
+			DepthOfField = { Enabled = false },
+			Bloom = { Enabled = false, Intensity = 0, Size = 0 },
+			Atmosphere = { Density = 0.1, Offset = 0.25, Glare = 0, Haze = 0.2 },
+		},
+		LensFlare = {
+			Enabled = false,
+			RaycastSamples = 1,
+			EmitterFraction = 0.2,
+			ObstructionInterval = 4,
+		},
+		Clouds = {
+			Tallness = 6,
+			Density = 0.2,
+			ShadowCast = false,
+			RenderFidelity = Enum.RenderFidelity.Performance,
+		},
+	},
+}
+
+local currentState = "Max"
+local overrides = {}
+local appliers = {}
+local changedEvent = Instance.new("BindableEvent")
+
+local function DeepCopy(value)
+	if type(value) ~= "table" then
+		return value
+	end
+	local copy = {}
+	for k, v in pairs(value) do
+		copy[k] = DeepCopy(v)
+	end
+	return copy
+end
+
+local function FindStateName(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+	local wanted = name:lower()
+	for key in pairs(Presets) do
+		if key:lower() == wanted then
+			return key
+		end
+	end
+	return nil
+end
+
+local function SetProps(instance, props)
+	for prop, value in pairs(props) do
+		local ok, err = pcall(function()
+			instance[prop] = value
+		end)
+		if not ok then
+			warn(("[SunsetQuality] couldn't set %s.%s: %s"):format(instance.Name, prop, tostring(err)))
+		end
+	end
+end
+
+function Quality.GetSettings()
+	local settings = DeepCopy(Presets[currentState])
+	for path, value in pairs(overrides) do
+		local keys = string.split(path, ".")
+		local node = settings
+		for i = 1, #keys - 1 do
+			if type(node[keys[i]]) ~= "table" then
+				node[keys[i]] = {}
+			end
+			node = node[keys[i]]
+		end
+		node[keys[#keys]] = value
+	end
+	return settings
+end
+
+local function RunApplier(name, settings)
+	local ok, err = pcall(appliers[name], settings)
+	if not ok then
+		warn(("[SunsetQuality] '%s' failed to apply: %s"):format(name, tostring(err)))
+	end
+end
+
+-- Each part of the script registers a function that takes the resolved
+-- settings and applies them. It runs immediately, and again on every change.
+function Quality.Register(name, applier)
+	appliers[name] = applier
+	RunApplier(name, Quality.GetSettings())
+end
+
+function Quality.Apply()
+	local settings = Quality.GetSettings()
+	for name in pairs(appliers) do
+		RunApplier(name, settings)
+	end
+end
+Quality.Reapply = Quality.Apply
+
+function Quality.Set(stateName, keepOverrides)
+	local key = FindStateName(stateName)
+	if not key then
+		warn(("[SunsetQuality] unknown state '%s'"):format(tostring(stateName)))
+		return false
+	end
+	currentState = key
+	if not keepOverrides then
+		overrides = {}
+	end
+	Quality.Apply()
+	changedEvent:Fire(key)
+	return true
+end
+
+function Quality.Get()
+	return currentState
+end
+
+function Quality.Override(path, value)
+	overrides[path] = value -- nil removes the override
+	Quality.Apply()
+end
+
+function Quality.ClearOverrides()
+	overrides = {}
+	Quality.Apply()
+end
+
+function Quality.List()
+	local names = {}
+	for key in pairs(Presets) do
+		table.insert(names, key)
+	end
+	table.sort(names)
+	return names
+end
+
+Quality.Presets = Presets
+Quality.Changed = changedEvent.Event
+
+do
+	local startState = FindStateName(_G.SunsetQualityState)
+	if startState then
+		currentState = startState
+	end
+end
+
+_G.SunsetQuality = Quality
+
+--==============================================================================
+-- LIGHTING / POST-PROCESSING
+--==============================================================================
+local Effects = {}
+
+local colorCorrection = Instance.new("ColorCorrectionEffect")
+colorCorrection.Name   = "ColorCorrection"
+colorCorrection.Brightness = 0
+colorCorrection.Contrast = 0.21
+colorCorrection.Saturation = 0.65
+colorCorrection.TintColor = Color3.fromRGB(255, 239, 249)
+colorCorrection.Parent = l
+Effects.ColorCorrection = colorCorrection
+
 do
 local i = Instance.new('SunRaysEffect')
-i.Intensity = 15
-i.Spread = 10
-i.Enabled = true
 i.Parent = l
+Effects.SunRays = i
 end
 do
 local i = Instance.new('DepthOfFieldEffect')
-i.FarIntensity = 0.18000000715255737
+i.FarIntensity = 0.18
 i.FocusDistance = 75
-i.InFocusRadius = 2.299999952316284
+i.InFocusRadius = 2.3
 i.NearIntensity = 0
-i.Enabled = false
 i.Parent = l
+Effects.DepthOfField = i
 end
 do
 local i = Instance.new('BloomEffect')
-i.Intensity = 1
-i.Size = 25
-i.Threshold = 1.100000023841858
-i.Enabled = true
+i.Threshold = 1.1
 i.Parent = l
+Effects.Bloom = i
 end
 do
 local i = Instance.new('Atmosphere')
-i.Density = 0.30000001192092896
-i.Offset = 1
 i.Color = Color3.new(0.6352941393852234,0.6352941393852234,0.6352941393852234)
 i.Decay = Color3.new(0.7411764860153198,0.7411764860153198,0.7411764860153198)
-i.Glare = 0.3199999928474426
-i.Haze = 1
 i.Parent = l
+Effects.Atmosphere = i
 end
+
+local skyInstance
 do
 local i = Instance.new('Sky')
 i.SkyboxBk = "http://www.roblox.com/asset/?id=252760981"
@@ -55,7 +306,10 @@ i.MoonTextureId = "rbxasset://sky/moon.jpg"
 i.SunAngularSize = 11
 i.SunTextureId = "rbxassetid://1345009717"
 i.Parent = l
+skyInstance = i
 end
+
+-- Static look (identical in every state)
 l.Brightness = 1.600000023841858
 l.ClockTime = -15.828888893127441
 l.FogEnd = 100000
@@ -63,21 +317,38 @@ l.FogStart = 0
 l.FogColor = Color3.new(0.7529412508010864,0.7529412508010864,0.7529412508010864)
 l.OutdoorAmbient = Color3.new(0.37254902720451355,0.38823530077934265,0.0470588244497776)
 l.Ambient = Color3.new(0.4274510145187378,0.4274510145187378,0.4274510145187378)
-l.GlobalShadows = true
 l.GeographicLatitude = 35.59749984741211
 l.EnvironmentSpecularScale = 0
-l.EnvironmentDiffuseScale = 0.10000000149011612
 l.ExposureCompensation = 0
 l.ColorShift_Bottom = Color3.new(0.49803921580314636,0.4588235318660736,0.22745098173618317)
 l.ColorShift_Top = Color3.new(0.8745098114013672,0.6274510025978088,0.007843137718737125)
-l.LightingStyle = Enum.LightingStyle.Realistic
-l.PrioritizeLightingQuality = true
--- Low-angle sun: slightly softened, but still fairly crisp penumbra.
-l.ShadowSoftness = 0.28
 l.TimeOfDay = "-15:49:44"
 
-local UserGameSettings = UserSettings():GetService("UserGameSettings")
-UserGameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel10
+-- The skybox is always present, whatever the state or overrides.
+Quality.Register("Sky", function()
+	if skyInstance.Parent ~= l then
+		skyInstance.Parent = l
+	end
+end)
+
+Quality.Register("Lighting", function(s)
+	SetProps(l, s.Lighting)
+end)
+
+Quality.Register("Effects", function(s)
+	for name, props in pairs(s.Effects) do
+		if Effects[name] then
+			SetProps(Effects[name], props)
+		else
+			warn("[SunsetQuality] unknown effect '" .. tostring(name) .. "'")
+		end
+	end
+end)
+
+Quality.Register("Graphics", function(s)
+	local UserGameSettings = UserSettings():GetService("UserGameSettings")
+	UserGameSettings.SavedQualityLevel = s.Graphics.SavedQualityLevel
+end)
 -- LensFlare.client.lua
 -- Particle-based lens flare system. Each flare source (tagged "LensFlare") gets
 -- a rig of Attachments/ParticleEmitters positioned via screen-space math each
@@ -91,6 +362,8 @@ local LensFlareConfig = {
 	FlareDepth = 13,
 	RaycastSamples = 4,
 	ParticleLifetime = 0.05,
+	EmitterFraction = 1, -- controlled by SunsetQuality
+	ObstructionInterval = 1, -- controlled by SunsetQuality
 }
 
 local function CreateEmitter(name, colorSequence, attributes)
@@ -339,6 +612,8 @@ function LensFlare.new(camera, flareStyle, part)
 	self.Enabled = true
 	self.Alpha = 0
 	self.EmitterData = {}
+	self.ObstructionFrame = 0
+	self.CachedObstruction = nil
 
 	self.Rig = Instance.new("Part")
 	self.Rig.Name = "LensFlareRig"
@@ -418,10 +693,22 @@ function LensFlare:Update()
 		distanceAlpha = 1 - math.clamp(toSource.Magnitude / distanceAttribute, 0, 1)
 	end
 
-	local obstructionAlpha = CalculateObstruction(camera, part)
+	-- Raycasts are the priciest part of a flare: skip them when the flare is
+	-- invisible anyway, and only re-sample every ObstructionInterval frames.
+	local baseAlpha = angleAlpha * distanceAlpha
+	local obstructionAlpha = 0
+	if not behindCamera and baseAlpha > 0 then
+		self.ObstructionFrame += 1
+		if self.CachedObstruction == nil
+			or self.ObstructionFrame >= math.max(1, LensFlareConfig.ObstructionInterval or 1) then
+			self.ObstructionFrame = 0
+			self.CachedObstruction = CalculateObstruction(camera, part)
+		end
+		obstructionAlpha = self.CachedObstruction
+	end
 	local strengthAttribute = part:GetAttribute("LensFlareStrength") or 1
 
-	self.Alpha = behindCamera and 0 or (angleAlpha * distanceAlpha * obstructionAlpha * strengthAttribute)
+	self.Alpha = behindCamera and 0 or (baseAlpha * obstructionAlpha * strengthAttribute)
 
 	if self.Alpha <= 0.001 then
 		return
@@ -432,7 +719,12 @@ function LensFlare:Update()
 	local screenOffset = sourceScreen - screenCenter
 	local fadeTime = 1 - angleAlpha
 
-	for _, data in ipairs(self.EmitterData) do
+	local emitterLimit = math.max(1, math.ceil(#self.EmitterData * math.clamp(LensFlareConfig.EmitterFraction or 1, 0, 1)))
+
+	for index, data in ipairs(self.EmitterData) do
+		if index > emitterLimit then
+			break
+		end
 		local emitter = data.Emitter
 		local position = GetPositionAttribute(emitter:GetAttribute("Position"), data.Position)
 		local positionMult = emitter:GetAttribute("PositionMult") or data.PositionMult
@@ -542,6 +834,16 @@ _G.LensFlareSystem = {
 
 RefreshSkyFlare()
 
+Quality.Register("LensFlare", function(s)
+	for key, value in pairs(s.LensFlare) do
+		if key == "Enabled" then
+			_G.LensFlareSystem.Enabled = value
+		else
+			LensFlareConfig[key] = value
+		end
+	end
+end)
+
 local function CreateFlareForPart(part)
 	local style = part:GetAttribute("LensFlareStyle") or "Default"
 	activeFlares[part] = LensFlare.new(camera, style, part)
@@ -625,6 +927,7 @@ local DefaultValues = {
 	Size = 3.572,
 	ShadowCast = true,
 	CloudType = "Cumulus",
+	RenderFidelity = Enum.RenderFidelity.Precise,
 }
 
 -- Blends around the hue wheel (shortest arc) instead of straight-line RGB.
@@ -805,6 +1108,17 @@ local function GetDominantSkyColor()
 	return nil
 end
 
+-- The skybox never changes, so only read its pixels once (this yields on the
+-- first call) instead of every time the clouds are rebuilt for a new state.
+local dominantSkyColor, dominantSkyResolved = nil, false
+local function GetCachedDominantSkyColor()
+	if not dominantSkyResolved then
+		dominantSkyColor = GetDominantSkyColor()
+		dominantSkyResolved = true
+	end
+	return dominantSkyColor
+end
+
 -- Same idea as Shadow, but brightens/dims toward a per-layer shade value
 -- (used for the original vertical banding effect) without desaturating the
 -- color the way lerping toward flat grey would.
@@ -825,21 +1139,42 @@ function CloudClass:new(attributes)
 	self.Size = attributes.Size or DefaultValues.Size
 	self.ShadowCast = attributes.ShadowCast ~= nil and attributes.ShadowCast or DefaultValues.ShadowCast
 	self.CloudType = attributes.CloudType or DefaultValues.CloudType
+	self.RenderFidelity = attributes.RenderFidelity or DefaultValues.RenderFidelity
+
+	self.Instances = {}
+	self.Generation = 0
+	self.HasSpawned = false
 
 	return self
 end
 
+function CloudClass:Clear()
+	self.Generation += 1 -- cancels any spawn that's still mid-flight
+	for _, cloud in ipairs(self.Instances) do
+		cloud:Destroy()
+	end
+	table.clear(self.Instances)
+end
+
+function CloudClass:Respawn()
+	self:Clear()
+	self:SpawnClouds()
+end
+
 function CloudClass:SpawnClouds()
+	self.HasSpawned = true
+	local generation = self.Generation
 	task.spawn(function()
 		local templateName = self.CloudType == "Stratus" and "StratusCloud" or "CumulusCloud"
 		local template = CloudsFolder:WaitForChild(templateName)
 
+		local fidelity = self.RenderFidelity
 		if template:IsA("MeshPart") then
-			template.RenderFidelity = Enum.RenderFidelity.Precise
+			template.RenderFidelity = fidelity
 		end
 		for _, descendant in ipairs(template:GetDescendants()) do
 			if descendant:IsA("MeshPart") then
-				descendant.RenderFidelity = Enum.RenderFidelity.Precise
+				descendant.RenderFidelity = fidelity
 			end
 		end
 
@@ -865,10 +1200,15 @@ function CloudClass:SpawnClouds()
 		-- actually been authored for it - the exact trap that turned the clouds
 		-- brown before.
 		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
-		local nearSunColor = GetDominantSkyColor()
+		local nearSunColor = GetCachedDominantSkyColor()
 			or (atmosphere and atmosphere.Color and atmosphere.Color:Lerp(Lighting.ColorShift_Top, 0.6))
 			or KelvinToColor3(2000 + sunElevation * 4500)
 		local awaySunColor = Lighting.ColorShift_Bottom
+
+		-- The quality state may have changed while the sky color was loading.
+		if generation ~= self.Generation then
+			return
+		end
 
 		lastCloud.Position = Vector3.new(392.629, self.Height, -405.891)
 
@@ -880,6 +1220,7 @@ function CloudClass:SpawnClouds()
 			local ran2 = math.random(-self.Offset, self.Offset)
 
 			cl.Parent = workspace
+			table.insert(self.Instances, cl)
 			cl.Position = cl.Position + Vector3.new(ran1, 5, ran2)
 			cl.CastShadow = self.ShadowCast
 
@@ -992,4 +1333,22 @@ local Clouds = CloudsModule.Clouds:new({
 	CloudType = "Cumulus"
 })
 
-Clouds:SpawnClouds()
+-- The first call spawns the clouds at the current state's density; later
+-- state changes rebuild them only if a cloud setting actually differs.
+Quality.Register("Clouds", function(s)
+	local c = s.Clouds
+	local changed = not Clouds.HasSpawned
+		or Clouds.Tallness ~= c.Tallness
+		or Clouds.Density ~= c.Density
+		or Clouds.ShadowCast ~= c.ShadowCast
+		or Clouds.RenderFidelity ~= c.RenderFidelity
+
+	Clouds.Tallness = c.Tallness
+	Clouds.Density = c.Density
+	Clouds.ShadowCast = c.ShadowCast
+	Clouds.RenderFidelity = c.RenderFidelity
+
+	if changed then
+		Clouds:Respawn()
+	end
+end)
