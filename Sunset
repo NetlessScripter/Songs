@@ -60,7 +60,7 @@ local Presets = {
 
 	--------------------------------------------------------------- MEDIUM
 	Medium = {
-		Graphics = { SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel5 },
+		Graphics = { SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel6 },
 		Lighting = {
 			GlobalShadows = true,
 			PrioritizeLightingQuality = false,
