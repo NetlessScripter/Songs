@@ -50,6 +50,7 @@ local Presets = {
 			ObstructionInterval = 1, -- re-raycast every N frames
 		},
 		Clouds = {
+			Enabled = true,
 			Tallness = 40,
 			Density = 0.2,
 			ShadowCast = true,
@@ -83,6 +84,7 @@ local Presets = {
 			ObstructionInterval = 2,
 		},
 		Clouds = {
+			Enabled = true,
 			Tallness = 20,
 			Density = 0.2,
 			ShadowCast = true,
@@ -114,6 +116,7 @@ local Presets = {
 			ObstructionInterval = 4,
 		},
 		Clouds = {
+			Enabled = false, -- clouds are deleted and not respawned
 			Tallness = 6,
 			Density = 0.2,
 			ShadowCast = false,
@@ -1333,22 +1336,27 @@ local Clouds = CloudsModule.Clouds:new({
 	CloudType = "Cumulus"
 })
 
--- The first call spawns the clouds at the current state's density; later
--- state changes rebuild them only if a cloud setting actually differs.
+-- Every apply destroys the clouds. Max and Medium then respawn them (deferred,
+-- so the Lighting / Effects changes from the same apply are already in place
+-- when the clouds read the sun and sky colors). Performance leaves them gone.
 Quality.Register("Clouds", function(s)
 	local c = s.Clouds
-	local changed = not Clouds.HasSpawned
-		or Clouds.Tallness ~= c.Tallness
-		or Clouds.Density ~= c.Density
-		or Clouds.ShadowCast ~= c.ShadowCast
-		or Clouds.RenderFidelity ~= c.RenderFidelity
 
 	Clouds.Tallness = c.Tallness
 	Clouds.Density = c.Density
 	Clouds.ShadowCast = c.ShadowCast
 	Clouds.RenderFidelity = c.RenderFidelity
 
-	if changed then
-		Clouds:Respawn()
+	Clouds:Clear()
+	if c.Enabled == false then
+		return
 	end
+
+	local generation = Clouds.Generation
+	task.defer(function()
+		if Clouds.Generation ~= generation then
+			return -- another apply happened first
+		end
+		Clouds:SpawnClouds()
+	end)
 end)
