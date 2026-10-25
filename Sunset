@@ -375,8 +375,9 @@ do
 	local TARGET_PHRASE = "Okay, Beginning now."
 
 	local NIGHT_CLOCKTIME = 0 -- 0 = midnight
-	local TIME_TWEEN = 6 -- seconds for the time of day to reach night
-	local PROP_TWEEN = 4 -- seconds for everything else to settle into the new look
+	-- The whole sequence is 0.7s total (TIME_TWEEN + PROP_TWEEN), the same length as Event_2's fade to black
+	local TIME_TWEEN = 0.45 -- seconds for the time of day to reach night (the sky swaps right after this)
+	local PROP_TWEEN = 0.25 -- seconds for everything else to settle into the new look
 	local EASE_STYLE = Enum.EasingStyle.Sine
 	local EASE_DIR = Enum.EasingDirection.InOut
 
