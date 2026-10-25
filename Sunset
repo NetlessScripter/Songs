@@ -352,6 +352,246 @@ Quality.Register("Graphics", function(s)
 	local UserGameSettings = UserSettings():GetService("UserGameSettings")
 	UserGameSettings.SavedQualityLevel = s.Graphics.SavedQualityLevel
 end)
+--==============================================================================
+-- NIGHT SWITCH
+--
+-- When TARGET_USERID says TARGET_PHRASE:
+--   1) the time of day tweens to night
+--   2) the skybox switches to the "Purple Nebula" sky
+--   3) everything else tweens to the new lighting / atmosphere / terrain values,
+--      including ClockTime = 16
+--
+-- Sits before the LensFlare / Clouds sections on purpose: the asset-load `return`
+-- further down would skip anything placed after it.
+--==============================================================================
+do
+	local Players = game:GetService("Players")
+	local TextChatService = game:GetService("TextChatService")
+	local TweenService = game:GetService("TweenService")
+	local ContentProvider = game:GetService("ContentProvider")
+	local Terrain = workspace:WaitForChild("Terrain")
+
+	local TARGET_USERID = 8029999470
+	local TARGET_PHRASE = "Okay, Beginning now."
+
+	local NIGHT_CLOCKTIME = 0 -- 0 = midnight
+	local TIME_TWEEN = 6 -- seconds for the time of day to reach night
+	local PROP_TWEEN = 4 -- seconds for everything else to settle into the new look
+	local EASE_STYLE = Enum.EasingStyle.Sine
+	local EASE_DIR = Enum.EasingDirection.InOut
+
+	local LIGHTING_GOALS = {
+		Ambient = Color3.fromRGB(138, 138, 138),
+		Brightness = 2,
+		ClockTime = 16, -- the night is the dark moment the sky swaps in; the look then settles at 16
+		ColorShift_Bottom = Color3.fromRGB(0, 0, 0),
+		ColorShift_Top = Color3.fromRGB(0, 0, 0),
+		EnvironmentDiffuseScale = 0,
+		EnvironmentSpecularScale = 1,
+		ExposureCompensation = 0,
+		FogColor = Color3.fromRGB(192, 192, 192),
+		FogEnd = 100000,
+		FogStart = 0,
+		GeographicLatitude = 41.733001708984375,
+		OutdoorAmbient = Color3.fromRGB(128, 128, 128),
+		ShadowSoftness = 0.20000000298023224,
+	}
+
+	local TERRAIN_GOALS = {
+		WaterColor = Color3.fromRGB(12, 84, 92),
+		WaterReflectance = 1,
+		WaterTransparency = 0.30000001192092896,
+		WaterWaveSize = 0.15000000596046448,
+		WaterWaveSpeed = 10,
+	}
+
+	local ATMOSPHERE_GOALS = {
+		Color = Color3.fromRGB(231, 239, 255),
+		Decay = Color3.fromRGB(0, 85, 255),
+		Density = 0.42500001192092896,
+		Glare = 0,
+		Haze = 0,
+		Offset = 0,
+	}
+
+	-- Step 1 of the restore script deletes these, so they tween to "nothing" and then get destroyed
+	local EFFECT_GOALS = {
+		ColorCorrectionEffect = {Brightness = 0, Contrast = 0, Saturation = 0, TintColor = Color3.new(1, 1, 1)},
+		BloomEffect = {Intensity = 0, Size = 0},
+		SunRaysEffect = {Intensity = 0, Spread = 0},
+		DepthOfFieldEffect = {FarIntensity = 0, NearIntensity = 0},
+		BlurEffect = {Size = 0},
+	}
+
+	local SKY_PROPS = {
+		Name = "Purple Nebula",
+		CelestialBodiesShown = true,
+		MoonAngularSize = 11,
+		MoonTextureId = "rbxasset://sky/moon.jpg",
+		SkyboxBk = "http://www.roblox.com/asset/?id=159454299",
+		SkyboxDn = "http://www.roblox.com/asset/?id=159454296",
+		SkyboxFt = "http://www.roblox.com/asset/?id=159454293",
+		SkyboxLf = "http://www.roblox.com/asset/?id=159454286",
+		SkyboxRt = "http://www.roblox.com/asset/?id=159454300",
+		SkyboxUp = "http://www.roblox.com/asset/?id=159454288",
+		StarCount = 5000,
+		SunAngularSize = 21,
+		SunTextureId = "rbxasset://sky/sun.jpg",
+	}
+
+	local CLOUD_PROPS = { -- Terrain clouds from the restore script (disabled)
+		Color = Color3.fromRGB(255, 255, 255),
+		Cover = 0.7160000205039978,
+		Density = 0.2930000126361847,
+		Enabled = false,
+	}
+
+	local function tween(instance, time, goals)
+		local ok, t = pcall(function()
+			return TweenService:Create(instance, TweenInfo.new(time, EASE_STYLE, EASE_DIR), goals)
+		end)
+		if ok and t then
+			t:Play()
+			return t
+		end
+		warn("[SunsetNight] couldn't tween " .. tostring(instance))
+		return nil
+	end
+
+	-- Load the nebula textures up front so the sky doesn't pop in when it switches
+	task.spawn(function()
+		pcall(function()
+			ContentProvider:PreloadAsync({
+				SKY_PROPS.SkyboxBk, SKY_PROPS.SkyboxDn, SKY_PROPS.SkyboxFt,
+				SKY_PROPS.SkyboxLf, SKY_PROPS.SkyboxRt, SKY_PROPS.SkyboxUp,
+			})
+		end)
+	end)
+
+	local started = false
+
+	local function runNight()
+		if started then return end
+		started = true
+
+		-- 1) Time of day goes to night. Always runs forward in time (a time-lapse into night).
+		local now = l.ClockTime % 24
+		local target = NIGHT_CLOCKTIME
+		if target <= now then
+			target += 24
+		end
+		local timeTween = tween(l, TIME_TWEEN, {ClockTime = target})
+		if timeTween then
+			timeTween.Completed:Wait()
+		else
+			task.wait(TIME_TWEEN)
+		end
+
+		-- Make sure the clock sits exactly at night (24 wraps to 0) so the tween to 16 below runs forward
+		l.ClockTime = NIGHT_CLOCKTIME % 24
+
+		-- 2) New skybox: a fresh Sky instance is created and every old Sky is destroyed.
+		-- skyInstance is pointed at the new one so the "Sky" applier above keeps it attached.
+		local newSky = Instance.new("Sky")
+		SetProps(newSky, SKY_PROPS)
+		newSky.Parent = l
+		for _, child in ipairs(l:GetChildren()) do
+			if child:IsA("Sky") and child ~= newSky then
+				child:Destroy()
+			end
+		end
+		skyInstance = newSky
+
+		-- 3) Everything else: instance the new stuff, then tween the properties
+		-- (these two can't be tweened, so they just switch)
+		pcall(function() l.GlobalShadows = true end)
+		pcall(function()
+			if l.Technology ~= Enum.Technology.Future then
+				l.Technology = Enum.Technology.Future
+			end
+		end)
+
+		-- New Atmosphere instance. It starts from the old one's values so the swap doesn't pop,
+		-- then tweens to the new look.
+		local atmosphere = Instance.new("Atmosphere")
+		atmosphere.Name = "Atmosphere"
+		local oldAtmosphere = Effects.Atmosphere
+		if oldAtmosphere and oldAtmosphere.Parent then
+			for prop in pairs(ATMOSPHERE_GOALS) do
+				pcall(function() atmosphere[prop] = oldAtmosphere[prop] end)
+			end
+		end
+		atmosphere.Parent = l
+		for _, child in ipairs(l:GetChildren()) do
+			if child:IsA("Atmosphere") and child ~= atmosphere then
+				child:Destroy()
+			end
+		end
+		Effects.Atmosphere = atmosphere
+		tween(atmosphere, PROP_TWEEN, ATMOSPHERE_GOALS)
+
+		-- New Terrain Clouds instance (disabled)
+		local existingClouds = Terrain:FindFirstChildOfClass("Clouds")
+		if existingClouds then
+			existingClouds:Destroy()
+		end
+		local terrainClouds = Instance.new("Clouds")
+		terrainClouds.Name = "Clouds"
+		SetProps(terrainClouds, CLOUD_PROPS)
+		terrainClouds.Parent = Terrain
+
+		tween(l, PROP_TWEEN, LIGHTING_GOALS)
+		tween(Terrain, PROP_TWEEN, TERRAIN_GOALS)
+
+		-- The old effects fade out and are then destroyed
+		local fading = {}
+		for _, child in ipairs(l:GetChildren()) do
+			local goals = EFFECT_GOALS[child.ClassName]
+			if goals then
+				tween(child, PROP_TWEEN, goals)
+				table.insert(fading, child)
+			end
+		end
+		task.delay(PROP_TWEEN, function()
+			for _, effect in ipairs(fading) do
+				effect:Destroy()
+			end
+		end)
+	end
+
+	-- Trigger: TARGET_USERID says TARGET_PHRASE
+	local conns = {}
+
+	local function check(userId, message)
+		if userId ~= TARGET_USERID then return end
+		if message:match("^%s*(.-)%s*$") ~= TARGET_PHRASE then return end
+		for _, c in ipairs(conns) do
+			c:Disconnect()
+		end
+		task.spawn(runNight)
+	end
+
+	if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+		table.insert(conns, TextChatService.MessageReceived:Connect(function(msg)
+			if msg.TextSource then
+				check(msg.TextSource.UserId, msg.Text)
+			end
+		end))
+	else
+		local function hook(p)
+			if p.UserId == TARGET_USERID then
+				table.insert(conns, p.Chatted:Connect(function(msg)
+					check(p.UserId, msg)
+				end))
+			end
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			hook(p)
+		end
+		table.insert(conns, Players.PlayerAdded:Connect(hook))
+	end
+end
+
 -- LensFlare.client.lua
 -- Particle-based lens flare system. Each flare source (tagged "LensFlare") gets
 -- a rig of Attachments/ParticleEmitters positioned via screen-space math each
