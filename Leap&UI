@@ -7568,3 +7568,206 @@ Border_11.SliceScale = 1
 Border_11.TileSize = UDim2.new(1.000000, 0, 1.000000, 0)
 Border_11.Parent = i3_5
 end)
+
+
+-- ===== HEALTH BAR DRAIN (Sparking Zero style) =====
+-- Paste at the very bottom of the file, after the final `end)`.
+--
+-- Drives the visible HUD bar (NewHud.Here.Health) from your Humanoid's health:
+--   * the main bar drains fast but smoothly (no hard snap)
+--   * the red "Damaged" chunk holds for a beat, then drains smoothly behind it
+--   * LAYERS = 1 uses just the blue bar; 2-3 stacks the purple/grey layers on top, emptying top-down
+--   * small red flash + pulse on every hit
+-- Healing fills the bar back up slowly with no red trail.
+
+task.spawn(function()
+    local Players      = game:GetService("Players")
+    local RunService   = game:GetService("RunService")
+    local TweenService = game:GetService("TweenService")
+    local player       = Players.LocalPlayer
+
+    -- ===== CONFIG =====
+    local LAYERS         =  1     -- 1 = single blue bar (default). 2-3 = split health across the purple/grey layers too.
+    local FRONT_DRAIN    = 14    -- main bar speed when hit (higher = snappier)
+    local FRONT_HEAL     = 3     -- main bar speed when healing
+    local TRAIL_DELAY    = 0.55  -- seconds the red chunk waits after a hit before draining
+    local TRAIL_SPEED    = 2.2   -- red chunk drain speed (higher = faster)
+    local TRAIL_MIN_RATE = 0.12  -- minimum red drain per second, so it always finishes
+    local HIT_FLASH      = true  -- red flash + pulse on damage
+
+    -- ===== FIND THE HUD =====
+    local playerGui = player:WaitForChild("PlayerGui")
+
+    -- The HUD builder above stores its ScreenGui in the global `Main`. Prefer that so we
+    -- never grab a different "Main" GUI that the game itself might own.
+    local mainGui
+    local waited = 0
+    while not mainGui do
+        mainGui = Main or (waited > 10 and playerGui:FindFirstChild("Main")) or nil
+        if mainGui then break end
+        if waited > 60 then
+            warn("[HealthBar] HUD never appeared")
+            return
+        end
+        task.wait(0.25)
+        waited += 0.25
+    end
+
+    local function find(root, ...)
+        local node = root
+        for _, name in ipairs({ ... }) do
+            node = node:WaitForChild(name, 30)
+            if not node then
+                warn("[HealthBar] couldn't find '" .. name .. "'")
+                return nil
+            end
+        end
+        return node
+    end
+
+    -- NewHud has two "Here" frames: "-Here" (hidden, the old flat bar) and "Here" (the visible one).
+    local healthGui   = find(mainGui, "NewHud", "Here", "Health")
+    local layerFolder = healthGui and find(healthGui, "Here")
+    if not layerFolder then return end
+
+    -- Each layer is a bar image masked by a hard-edged UIGradient. Sliding the gradient's
+    -- Offset.X from 0 -> 1 reveals the bar left-to-right. Its "Damaged" child is the red chunk.
+    local layers = {}
+    for k = 1, 3 do
+        local layer = layerFolder:FindFirstChild(tostring(k))
+        if layer then
+            local trailImage = layer:FindFirstChild("Damaged")
+            layers[k] = {
+                fill  = layer:FindFirstChild("ColorGradient"),
+                trail = trailImage and trailImage:FindFirstChildOfClass("UIGradient"),
+            }
+        end
+    end
+
+    local hitFlash  = healthGui:FindFirstChild("Damaged")        -- red glow image, hidden by default
+    local uiScale   = healthGui:FindFirstChildOfClass("UIScale")
+    local baseScale = uiScale and uiScale.Scale or 1             -- HUD ships at 0.8, so pulse relative to it
+
+    -- ===== RENDERING =====
+    -- The mask's soft edge sits at ~0.0015 of the gradient, so pad the range a hair
+    -- so 0 is truly empty and 1 is truly full.
+    local function toOffset(fraction)
+        return Vector2.new(fraction * 1.004 - 0.002, 0)
+    end
+
+    local state = {
+        target    = 1, -- real health, 0-1
+        front     = 1, -- what the main bar is showing
+        trail     = 1, -- what the red chunk is showing (always >= front)
+        holdUntil = 0, -- red chunk waits until this time
+    }
+
+    local function render()
+        for k = 1, 3 do
+            local l = layers[k]
+            if l then
+                local on = k <= LAYERS
+                -- layer 1 is the bottom third of health, layer LAYERS is the top; top empties first
+                local f = on and math.clamp(state.front * LAYERS - (k - 1), 0, 1) or 0
+                local t = on and math.clamp(state.trail * LAYERS - (k - 1), 0, 1) or 0
+                if l.fill then l.fill.Offset = toOffset(f) end
+                if l.trail then l.trail.Offset = toOffset(t) end
+            end
+        end
+    end
+
+    -- ===== HIT EFFECT =====
+    local function hitEffect()
+        if not HIT_FLASH then return end
+
+        if hitFlash then
+            hitFlash.Visible = true
+            hitFlash.ImageTransparency = 0.25
+            local tween = TweenService:Create(
+                hitFlash,
+                TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { ImageTransparency = 1 }
+            )
+            tween.Completed:Connect(function(status)
+                if status == Enum.PlaybackState.Completed then
+                    hitFlash.Visible = false
+                end
+            end)
+            tween:Play()
+        end
+
+        if uiScale then
+            uiScale.Scale = baseScale * 1.05
+            TweenService:Create(
+                uiScale,
+                TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+                { Scale = baseScale }
+            ):Play()
+        end
+    end
+
+    -- ===== ANIMATION LOOP =====
+    RunService.RenderStepped:Connect(function(dt)
+        if state.front == state.target and state.trail == state.front then
+            return -- at rest, nothing to do
+        end
+
+        -- main bar chases real health (exponential ease = fast start, soft landing)
+        local diff = state.target - state.front
+        if math.abs(diff) < 0.0005 then
+            state.front = state.target
+        else
+            local speed = diff < 0 and FRONT_DRAIN or FRONT_HEAL
+            state.front += diff * (1 - math.exp(-speed * dt))
+        end
+
+        -- red chunk: never below the bar; after the hold, eases down onto it
+        if state.trail < state.front then
+            state.trail = state.front
+        elseif state.trail > state.front and os.clock() >= state.holdUntil then
+            local gap   = state.trail - state.front
+            local drain = math.max(gap * (1 - math.exp(-TRAIL_SPEED * dt)), TRAIL_MIN_RATE * dt)
+            state.trail = math.max(state.trail - drain, state.front)
+        end
+
+        render()
+    end)
+
+    -- ===== HUMANOID HOOKUP =====
+    local conns = {}
+
+    local function bind(character)
+        for _, c in ipairs(conns) do c:Disconnect() end
+        table.clear(conns)
+
+        local humanoid = character:WaitForChild("Humanoid")
+        local lastHealth = humanoid.Health
+
+        local function fraction()
+            return math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+        end
+
+        -- fresh character: snap to the real value instead of animating
+        local start = fraction()
+        state.target, state.front, state.trail = start, start, start
+        render()
+
+        table.insert(conns, humanoid.HealthChanged:Connect(function(health)
+            if health < lastHealth then
+                state.holdUntil = os.clock() + TRAIL_DELAY -- every hit restarts the hold
+                hitEffect()
+            end
+            lastHealth = health
+            state.target = fraction()
+        end))
+
+        table.insert(conns, humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function()
+            state.target = fraction()
+        end))
+    end
+
+    if player.Character then
+        task.spawn(bind, player.Character)
+    end
+    player.CharacterAdded:Connect(bind)
+end)
