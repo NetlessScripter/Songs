@@ -27,7 +27,8 @@ local l = game:GetService('Lighting')
 if _G.Graphics == nil then
 	_G.Graphics = true
 end
-local GFX = _G.Graphics ~= false
+local GFX = not (_G.Graphics == false or tostring(_G.Graphics):lower() == "false")
+print("[Sunset] _G.Graphics =", tostring(_G.Graphics), "-> graphics", GFX and "ON" or "OFF")
 
 local Quality = {}
 
