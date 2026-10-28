@@ -1,14 +1,3 @@
---[[
-    EdgeLeap.lua
-
-    Detects when the player is standing within EDGE_THRESHOLD studs of the
-    edge of whatever part they're on, shows a small "LEAP" button, and on
-    press teleports them to the edge + fires them outward/upward with
-    enough velocity to clear LEAP_HEIGHT studs of air, Spider-Man style.
-
-    Drop this in StarterPlayerScripts as a LocalScript (or run it directly
-    through an executor).
-]]
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
