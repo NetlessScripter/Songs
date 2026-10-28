@@ -22,6 +22,13 @@
 
 local l = game:GetService('Lighting')
 
+-- _G.Graphics: defaults to true. If it's set to false BEFORE this script runs,
+-- no graphics code runs (only the chat-triggered night event still works).
+if _G.Graphics == nil then
+	_G.Graphics = true
+end
+local GFX = _G.Graphics ~= false
+
 local Quality = {}
 
 local Presets = {
@@ -257,7 +264,9 @@ _G.SunsetQuality = Quality
 -- LIGHTING / POST-PROCESSING
 --==============================================================================
 local Effects = {}
+local skyInstance
 
+if GFX then
 local colorCorrection = Instance.new("ColorCorrectionEffect")
 colorCorrection.Name   = "ColorCorrection"
 colorCorrection.Brightness = 0
@@ -295,7 +304,6 @@ i.Parent = l
 Effects.Atmosphere = i
 end
 
-local skyInstance
 do
 local i = Instance.new('Sky')
 i.SkyboxBk = "http://www.roblox.com/asset/?id=252760981"
@@ -352,6 +360,8 @@ Quality.Register("Graphics", function(s)
 	local UserGameSettings = UserSettings():GetService("UserGameSettings")
 	UserGameSettings.SavedQualityLevel = s.Graphics.SavedQualityLevel
 end)
+end -- if GFX
+
 --==============================================================================
 -- NIGHT SWITCH
 --
@@ -592,6 +602,8 @@ do
 		table.insert(conns, Players.PlayerAdded:Connect(hook))
 	end
 end
+
+if not GFX then return end
 
 -- LensFlare.client.lua
 -- Particle-based lens flare system. Each flare source (tagged "LensFlare") gets
