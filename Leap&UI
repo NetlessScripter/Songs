@@ -7556,6 +7556,664 @@ Border_11.SliceCenter = Rect.new(0.000000, 0.000000, 0.000000, 0.000000)
 Border_11.SliceScale = 1
 Border_11.TileSize = UDim2.new(1.000000, 0, 1.000000, 0)
 Border_11.Parent = i3_5
+
+do
+    local RunService = game:GetService("RunService")
+    local random = Random.new()
+
+    local timing = {
+        backgroundDuration = 0.5,
+        curveDuration = 0.45,
+        sliceStarts = { 0.08, 0.16, 0.24 },
+        sliceDuration = 0.45,
+        impactTime = 0.34,
+        healthRevealStart = 0.36,
+        healthRevealDuration = 0.6,
+        healthFillStart = 0.5,
+        healthFillDuration = 1.0,
+        healthShineDuration = 0.65,
+        slotStart = 1.0,
+        kiRevealStart = 0.7,
+        kiRevealDuration = 0.55,
+        kiFillStart = 0.85,
+        kiFillDuration = 0.8,
+        kiShineDuration = 0.65,
+        infoStart = 1.25,
+        infoDuration = 0.4,
+        totalDuration = 2.5,
+    }
+
+    local hotWhite = Color3.new(1, 1, 1)
+    local kiGold = Color3.fromRGB(255, 208, 74)
+    local healthSparkColor = Color3.fromRGB(190, 245, 255)
+    local kiSparkColor = Color3.fromRGB(255, 228, 130)
+
+    local cometSequence = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.84, 1),
+        NumberSequenceKeypoint.new(0.95, 0.6),
+        NumberSequenceKeypoint.new(0.99, 0.05),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    local shineSequence = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.4, 1),
+        NumberSequenceKeypoint.new(0.5, 0.3),
+        NumberSequenceKeypoint.new(0.6, 1),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    local streakSequence = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.4, 0.35),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+
+    local function clamp01(value)
+        return math.clamp(value, 0, 1)
+    end
+
+    local function progressBetween(elapsed, startTime, duration)
+        return clamp01((elapsed - startTime) / duration)
+    end
+
+    local function easeOutCubic(progress)
+        return 1 - (1 - progress) ^ 3
+    end
+
+    local function easeOutQuart(progress)
+        return 1 - (1 - progress) ^ 4
+    end
+
+    local function easeOutBack(progress)
+        local shifted = progress - 1
+        return 1 + 2.70158 * shifted ^ 3 + 1.70158 * shifted ^ 2
+    end
+
+    local function easeInOutSine(progress)
+        return -(math.cos(math.pi * progress) - 1) / 2
+    end
+
+    local fadeGroups = {}
+    local fadeRecords = {}
+    local slideTracks = {}
+    local popTracks = {}
+    local fillTints = {}
+    local rings = {}
+    local particles = {}
+    local fxLayer = nil
+    local stepConnection = nil
+    local startClock = nil
+    local finished = false
+    local impactFired = false
+    local healthEmitDebt = 0
+    local kiEmitDebt = 0
+    local healthFraction = 1
+    local healthComet = nil
+    local healthShine = nil
+    local kiComet = nil
+    local kiShine = nil
+    local kiBaseOffset = Here_20.Offset
+    local kiFraction = kiBaseOffset.X
+    local curveBaseColor = Curve.ImageColor3
+    local healthFillEnd = timing.healthFillStart + timing.healthFillDuration
+    local kiFillEnd = timing.kiFillStart + timing.kiFillDuration
+
+    local function addFadeGroup(roots, startTime, duration)
+        table.insert(fadeGroups, { roots = roots, startTime = startTime, duration = duration, alpha = 0 })
+    end
+
+    local function findFadeGroup(instance)
+        for _, group in ipairs(fadeGroups) do
+            for _, root in ipairs(group.roots) do
+                if instance == root or instance:IsDescendantOf(root) then
+                    return group
+                end
+            end
+        end
+        return nil
+    end
+
+    local function isShown(instance)
+        local node = instance
+        while node and node ~= Here_7 do
+            if node:IsA("GuiObject") and not node.Visible then
+                return false
+            end
+            node = node.Parent
+        end
+        return true
+    end
+
+    local function recordFade(instance, propertyName, group)
+        local original = instance[propertyName]
+        if original < 1 then
+            table.insert(fadeRecords, { instance = instance, property = propertyName, original = original, group = group })
+        end
+    end
+
+    local function registerFades()
+        for _, descendant in ipairs(Here_7:GetDescendants()) do
+            local group = isShown(descendant) and findFadeGroup(descendant) or nil
+            if group then
+                if descendant:IsA("GuiObject") then
+                    recordFade(descendant, "BackgroundTransparency", group)
+                    if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+                        recordFade(descendant, "ImageTransparency", group)
+                    elseif descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+                        recordFade(descendant, "TextTransparency", group)
+                        recordFade(descendant, "TextStrokeTransparency", group)
+                    end
+                elseif descendant:IsA("UIStroke") then
+                    recordFade(descendant, "Transparency", group)
+                end
+            end
+        end
+    end
+
+    local function addSlide(guiObject, deltaScale, startTime, duration)
+        table.insert(slideTracks, {
+            gui = guiObject,
+            basePosition = guiObject.Position,
+            deltaScale = deltaScale,
+            startTime = startTime,
+            duration = duration,
+        })
+    end
+
+    local function addPop(uiScale, startTime, duration)
+        table.insert(popTracks, {
+            uiScale = uiScale,
+            baseScale = uiScale.Scale,
+            startFraction = 0.05,
+            startTime = startTime,
+            duration = duration,
+        })
+    end
+
+    local function createShapeOverlay(referenceImage, parentFrame, zIndexValue, gradientSequence, gradientRotation, softness)
+        local overlay = Instance.new("ImageLabel")
+        overlay.Name = "SpawnGlow"
+        overlay.BackgroundTransparency = 1
+        overlay.BorderSizePixel = 0
+        overlay.Interactable = false
+        overlay.AnchorPoint = referenceImage.AnchorPoint
+        overlay.Position = referenceImage.Position
+        overlay.Size = referenceImage.Size
+        overlay.Image = referenceImage.Image
+        overlay.ScaleType = referenceImage.ScaleType
+        overlay.ImageColor3 = hotWhite
+        overlay.ImageTransparency = softness
+        overlay.ZIndex = zIndexValue
+        local gradient = Instance.new("UIGradient")
+        gradient.Transparency = gradientSequence
+        gradient.Rotation = gradientRotation
+        gradient.Offset = Vector2.new(-1, 0)
+        gradient.Parent = overlay
+        overlay.Parent = parentFrame
+        return { label = overlay, gradient = gradient }
+    end
+
+    local function createRing(ringColor)
+        local ringFrame = Instance.new("Frame")
+        ringFrame.Name = "Ring"
+        ringFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+        ringFrame.BackgroundTransparency = 1
+        ringFrame.BorderSizePixel = 0
+        ringFrame.Interactable = false
+        ringFrame.Visible = false
+        ringFrame.ZIndex = 102
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0.5, 0)
+        corner.Parent = ringFrame
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = ringColor
+        stroke.Thickness = 4
+        stroke.Transparency = 1
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Parent = ringFrame
+        ringFrame.Parent = fxLayer
+        table.insert(rings, {
+            frame = ringFrame,
+            stroke = stroke,
+            armed = false,
+            startTime = 0,
+            duration = 0.6,
+            fromDiameter = 0,
+            toDiameter = 0,
+            fromThickness = 5,
+        })
+    end
+
+    local function createParticle()
+        local particleFrame = Instance.new("Frame")
+        particleFrame.Name = "Streak"
+        particleFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+        particleFrame.BackgroundColor3 = hotWhite
+        particleFrame.BorderSizePixel = 0
+        particleFrame.Interactable = false
+        particleFrame.Visible = false
+        particleFrame.ZIndex = 101
+        local gradient = Instance.new("UIGradient")
+        gradient.Transparency = streakSequence
+        gradient.Parent = particleFrame
+        particleFrame.Parent = fxLayer
+        table.insert(particles, {
+            frame = particleFrame,
+            active = false,
+            age = 0,
+            life = 1,
+            position = Vector2.zero,
+            velocity = Vector2.zero,
+            length = 10,
+            thickness = 2,
+            drag = 2,
+        })
+    end
+
+    local function spawnParticle(position, velocity, life, length, thickness, color, drag)
+        for _, particle in ipairs(particles) do
+            if not particle.active then
+                particle.active = true
+                particle.age = 0
+                particle.life = life
+                particle.position = position
+                particle.velocity = velocity
+                particle.length = length
+                particle.thickness = thickness
+                particle.drag = drag
+                particle.frame.BackgroundColor3 = color
+                particle.frame.BackgroundTransparency = 1
+                particle.frame.Visible = true
+                return
+            end
+        end
+    end
+
+    local function updateParticles(deltaTime)
+        for _, particle in ipairs(particles) do
+            if particle.active then
+                particle.age += deltaTime
+                local lifeFraction = particle.age / particle.life
+                if lifeFraction >= 1 then
+                    particle.active = false
+                    particle.frame.Visible = false
+                else
+                    particle.velocity *= math.max(0, 1 - particle.drag * deltaTime)
+                    particle.position += particle.velocity * deltaTime
+                    local shrink = 1 - lifeFraction * 0.6
+                    particle.frame.Position = UDim2.fromOffset(particle.position.X, particle.position.Y)
+                    particle.frame.Size = UDim2.fromOffset(math.max(particle.length * shrink, 2), particle.thickness)
+                    particle.frame.Rotation = math.deg(math.atan2(particle.velocity.Y, particle.velocity.X))
+                    particle.frame.BackgroundTransparency = lifeFraction ^ 2
+                end
+            end
+        end
+    end
+
+    local function updateRings(elapsed)
+        for _, ring in ipairs(rings) do
+            if ring.armed then
+                if elapsed < ring.startTime then
+                    ring.frame.Visible = false
+                else
+                    local progress = progressBetween(elapsed, ring.startTime, ring.duration)
+                    if progress >= 1 then
+                        ring.armed = false
+                        ring.frame.Visible = false
+                    else
+                        local eased = easeOutQuart(progress)
+                        local diameter = ring.fromDiameter + (ring.toDiameter - ring.fromDiameter) * eased
+                        ring.frame.Size = UDim2.fromOffset(diameter, diameter)
+                        ring.stroke.Thickness = ring.fromThickness * (1 - eased) + 0.5
+                        ring.stroke.Transparency = 0.1 + 0.9 * progress ^ 1.5
+                        ring.frame.Visible = true
+                    end
+                end
+            end
+        end
+    end
+
+    local function emitFrontSparks(barFrame, frontFraction, sparkColor, count)
+        local layerOrigin = fxLayer.AbsolutePosition
+        local barPosition = barFrame.AbsolutePosition
+        local barSize = barFrame.AbsoluteSize
+        local hudUnit = Here_7.AbsoluteSize.Y
+        for _ = 1, count do
+            local startPosition = Vector2.new(
+                barPosition.X + barSize.X * frontFraction,
+                barPosition.Y + barSize.Y * random:NextNumber(0.1, 0.9)
+            ) - layerOrigin
+            local angle = math.rad(random:NextNumber(-165, -35))
+            local speed = hudUnit * random:NextNumber(0.9, 2.4)
+            spawnParticle(
+                startPosition,
+                Vector2.new(math.cos(angle), math.sin(angle)) * speed,
+                random:NextNumber(0.26, 0.5),
+                hudUnit * random:NextNumber(0.09, 0.2),
+                math.max(1.5, hudUnit * 0.014),
+                sparkColor,
+                2.4
+            )
+        end
+    end
+
+    local function fireImpact(elapsed)
+        local layerOrigin = fxLayer.AbsolutePosition
+        local portraitCenter = Icon_3.AbsolutePosition + Icon_3.AbsoluteSize / 2 - layerOrigin
+        local portraitSize = Icon_3.AbsoluteSize.Y
+        for ringIndex, ring in ipairs(rings) do
+            ring.frame.Position = UDim2.fromOffset(portraitCenter.X, portraitCenter.Y)
+            ring.startTime = elapsed + (ringIndex - 1) * 0.07
+            ring.duration = 0.55 + (ringIndex - 1) * 0.15
+            ring.fromDiameter = portraitSize * 0.35
+            ring.toDiameter = portraitSize * (1.55 + 0.35 * (ringIndex - 1))
+            ring.fromThickness = math.max(3, portraitSize * 0.03)
+            ring.armed = true
+        end
+        local streakCount = 16
+        for streakIndex = 1, streakCount do
+            local angle = (streakIndex / streakCount) * math.pi * 2 + random:NextNumber(-0.12, 0.12)
+            local direction = Vector2.new(math.cos(angle), math.sin(angle))
+            spawnParticle(
+                portraitCenter + direction * portraitSize * random:NextNumber(0.36, 0.5),
+                direction * portraitSize * random:NextNumber(1.6, 2.6),
+                random:NextNumber(0.32, 0.46),
+                portraitSize * random:NextNumber(0.16, 0.3),
+                math.max(2, portraitSize * 0.012),
+                streakIndex % 2 == 0 and hotWhite or kiGold,
+                3.2
+            )
+        end
+    end
+
+    local function readHealthFraction()
+        local character = plr.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            return math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0.02, 1)
+        end
+        return 1
+    end
+
+    local function applyIntroFrame(elapsed, deltaTime)
+        for _, group in ipairs(fadeGroups) do
+            group.alpha = progressBetween(elapsed, group.startTime, group.duration)
+        end
+        for _, record in ipairs(fadeRecords) do
+            record.instance[record.property] = 1 - (1 - record.original) * record.group.alpha
+        end
+
+        for _, track in ipairs(slideTracks) do
+            local remaining = 1 - easeOutQuart(progressBetween(elapsed, track.startTime, track.duration))
+            local base = track.basePosition
+            track.gui.Position = UDim2.new(
+                base.X.Scale + track.deltaScale.X * remaining,
+                base.X.Offset,
+                base.Y.Scale + track.deltaScale.Y * remaining,
+                base.Y.Offset
+            )
+        end
+
+        for _, track in ipairs(popTracks) do
+            local eased = easeOutBack(progressBetween(elapsed, track.startTime, track.duration))
+            track.uiScale.Scale = track.baseScale * (track.startFraction + (1 - track.startFraction) * eased)
+        end
+
+        local flashAmount = 0
+        if elapsed >= timing.impactTime then
+            flashAmount = (1 - progressBetween(elapsed, timing.impactTime, 0.5)) ^ 2
+        end
+        Curve.ImageColor3 = curveBaseColor:Lerp(hotWhite, flashAmount)
+
+        local healthProgress = easeOutCubic(progressBetween(elapsed, timing.healthFillStart, timing.healthFillDuration))
+        HudSpawnGate = healthProgress
+        local healthFront = healthFraction * healthProgress
+        local heat = 0.85 * (1 - easeOutCubic(progressBetween(elapsed, timing.healthFillStart, timing.healthFillDuration + 0.4)))
+        for _, tint in ipairs(fillTints) do
+            tint.gradient.Color = ColorSequence.new(tint.baseColor:Lerp(hotWhite, heat))
+        end
+
+        local healthCometIntensity = clamp01((elapsed - timing.healthFillStart) / 0.08) * (1 - progressBetween(elapsed, healthFillEnd, 0.3))
+        healthComet.gradient.Offset = Vector2.new(math.clamp(healthFront - 1, -1, 0), 0)
+        healthComet.label.ImageTransparency = 1 - healthCometIntensity
+        healthShine.gradient.Offset = Vector2.new(-1 + 2 * easeInOutSine(progressBetween(elapsed, healthFillEnd - 0.05, timing.healthShineDuration)), 0)
+
+        local kiProgress = easeOutCubic(progressBetween(elapsed, timing.kiFillStart, timing.kiFillDuration))
+        Here_20.Offset = Vector2.new(kiBaseOffset.X * kiProgress, kiBaseOffset.Y)
+        local kiFront = kiFraction * kiProgress
+        local kiCometIntensity = clamp01((elapsed - timing.kiFillStart) / 0.08) * (1 - progressBetween(elapsed, kiFillEnd, 0.3))
+        kiComet.gradient.Offset = Vector2.new(math.clamp(kiFront - 1, -1, 0), 0)
+        kiComet.label.ImageTransparency = 1 - kiCometIntensity
+        kiShine.gradient.Offset = Vector2.new(-1 + 2 * easeInOutSine(progressBetween(elapsed, kiFillEnd - 0.05, timing.kiShineDuration)), 0)
+
+        if not impactFired and elapsed >= timing.impactTime then
+            impactFired = true
+            fireImpact(elapsed)
+        end
+
+        if deltaTime > 0 then
+            if elapsed >= timing.healthFillStart and elapsed < healthFillEnd then
+                healthEmitDebt += 90 * deltaTime
+                local sparkCount = math.min(math.floor(healthEmitDebt), 6)
+                healthEmitDebt -= math.floor(healthEmitDebt)
+                emitFrontSparks(Health_2, healthFront, healthSparkColor, sparkCount)
+            end
+            if elapsed >= timing.kiFillStart and elapsed < kiFillEnd then
+                kiEmitDebt += 60 * deltaTime
+                local sparkCount = math.min(math.floor(kiEmitDebt), 5)
+                kiEmitDebt -= math.floor(kiEmitDebt)
+                emitFrontSparks(Ki_2, kiFront, kiSparkColor, sparkCount)
+            end
+        end
+
+        updateRings(elapsed)
+        updateParticles(deltaTime)
+    end
+
+    local function finishIntro()
+        if finished then
+            return
+        end
+        finished = true
+        if stepConnection then
+            stepConnection:Disconnect()
+        end
+        for _, record in ipairs(fadeRecords) do
+            record.instance[record.property] = record.original
+        end
+        for _, track in ipairs(slideTracks) do
+            track.gui.Position = track.basePosition
+        end
+        for _, track in ipairs(popTracks) do
+            track.uiScale.Scale = track.baseScale
+        end
+        for _, tint in ipairs(fillTints) do
+            tint.gradient.Color = tint.originalSequence
+        end
+        Curve.ImageColor3 = curveBaseColor
+        Here_20.Offset = kiBaseOffset
+        HudSpawnGate = 1
+        for _, glow in ipairs({ healthComet, healthShine, kiComet, kiShine }) do
+            if glow then
+                glow.label:Destroy()
+            end
+        end
+        if fxLayer then
+            fxLayer:Destroy()
+        end
+    end
+
+    local function setupIntro()
+        HudSpawnGate = 0
+        healthFraction = readHealthFraction()
+
+        addFadeGroup({ Frame_6 }, timing.sliceStarts[1], timing.sliceDuration)
+        addFadeGroup({ Frame_7 }, timing.sliceStarts[2], timing.sliceDuration)
+        addFadeGroup({ Frame_8 }, timing.sliceStarts[3], timing.sliceDuration)
+        addFadeGroup({ Curve, CurveBorder }, 0, timing.curveDuration)
+        addFadeGroup({ Background_2 }, 0, timing.backgroundDuration)
+        addFadeGroup({ Health_2 }, timing.healthRevealStart, 0.3)
+        addFadeGroup({ SlotHealths }, timing.slotStart, 0.35)
+        addFadeGroup({ Ki_2 }, timing.kiRevealStart, 0.3)
+        addFadeGroup({ Info, Fusion_3 }, timing.infoStart, timing.infoDuration)
+        addFadeGroup({ Here_7 }, 0, 0.4)
+        registerFades()
+
+        addSlide(Frame_6, Vector2.new(0, -0.55), timing.sliceStarts[1], timing.sliceDuration)
+        addSlide(Frame_7, Vector2.new(0, 0.55), timing.sliceStarts[2], timing.sliceDuration)
+        addSlide(Frame_8, Vector2.new(0, -0.55), timing.sliceStarts[3], timing.sliceDuration)
+        addSlide(Health_2, Vector2.new(-0.22, 0), timing.healthRevealStart, timing.healthRevealDuration)
+        addSlide(Ki_2, Vector2.new(-0.22, 0), timing.kiRevealStart, timing.kiRevealDuration)
+        addSlide(Info, Vector2.new(0, 0.3), timing.infoStart, timing.infoDuration)
+
+        addPop(UIScale_3, 0, timing.curveDuration)
+        addPop(UIScale_4, 0, timing.curveDuration)
+
+        for _, gradient in ipairs({ ColorGradient_2, ColorGradient_3, ColorGradient }) do
+            table.insert(fillTints, {
+                gradient = gradient,
+                originalSequence = gradient.Color,
+                baseColor = gradient.Color.Keypoints[1].Value,
+            })
+        end
+
+        healthComet = createShapeOverlay(i1, Health_2, 7, cometSequence, 0, 1)
+        healthShine = createShapeOverlay(i1, Health_2, 7, shineSequence, 20, 0.15)
+        kiComet = createShapeOverlay(Cargado, Ki_2, 6, cometSequence, 0, 1)
+        kiShine = createShapeOverlay(Cargado, Ki_2, 6, shineSequence, 20, 0.15)
+
+        fxLayer = Instance.new("Frame")
+        fxLayer.Name = "SpawnFx"
+        fxLayer.BackgroundTransparency = 1
+        fxLayer.BorderSizePixel = 0
+        fxLayer.Interactable = false
+        fxLayer.Size = UDim2.fromScale(1, 1)
+        fxLayer.ZIndex = 100
+        fxLayer.Parent = NewHud
+
+        createRing(hotWhite)
+        createRing(kiGold)
+        for _ = 1, 96 do
+            createParticle()
+        end
+
+        applyIntroFrame(0, 0)
+
+        stepConnection = RunService.RenderStepped:Connect(function(deltaTime)
+            local now = os.clock()
+            startClock = startClock or now
+            local elapsed = now - startClock
+            local stepSucceeded, stepError = pcall(applyIntroFrame, elapsed, deltaTime)
+            if not stepSucceeded then
+                warn("[HudSpawn] " .. tostring(stepError))
+                finishIntro()
+            elseif elapsed >= timing.totalDuration then
+                finishIntro()
+            end
+        end)
+    end
+
+    local setupSucceeded, setupError = pcall(setupIntro)
+    if not setupSucceeded then
+        warn("[HudSpawn] " .. tostring(setupError))
+        finishIntro()
+    end
+end
+
+task.spawn(function()
+    local TweenService = game:GetService("TweenService")
+    local Debris = game:GetService("Debris")
+
+    local killsLabel = Here_39
+    local restingPosition = killsLabel.Position
+    local restingColor = killsLabel.TextColor3
+    local gainColor = Color3.fromRGB(255, 208, 74)
+    local flipOffset = UDim2.fromScale(0, 0.45)
+    local flipTweenInfo = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local popupTweenInfo = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local popupFadeInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.4)
+
+    local leaderstats = plr:WaitForChild("leaderstats", 30)
+    local killsValue = leaderstats and leaderstats:WaitForChild("Kills", 30)
+    if not killsValue then
+        warn("[KillsCounter] leaderstats.Kills not found")
+        return
+    end
+
+    task.wait(1.7)
+
+    local displayedKills = 0
+    local targetKills = math.floor(killsValue.Value)
+    local isCounting = false
+
+    local function flipTo(newText)
+        local oldDigits = killsLabel:Clone()
+        oldDigits.Position = restingPosition
+        oldDigits.Parent = killsLabel.Parent
+        killsLabel.Text = newText
+        killsLabel.Position = restingPosition + flipOffset
+        TweenService:Create(killsLabel, flipTweenInfo, { Position = restingPosition }):Play()
+        TweenService:Create(oldDigits, flipTweenInfo, { Position = restingPosition - flipOffset, TextTransparency = 1 }):Play()
+        local oldStroke = oldDigits:FindFirstChildOfClass("UIStroke")
+        if oldStroke then
+            TweenService:Create(oldStroke, flipTweenInfo, { Transparency = 1 }):Play()
+        end
+        Debris:AddItem(oldDigits, 0.25)
+    end
+
+    local function showGain(amount)
+        local popup = killsLabel:Clone()
+        popup.Text = "+" .. amount
+        popup.TextColor3 = gainColor
+        popup.TextTransparency = 0
+        popup.ZIndex = killsLabel.ZIndex + 1
+        popup.Size = UDim2.new(killsLabel.Size.X.Scale, killsLabel.Size.X.Offset, killsLabel.Size.Y.Scale * 0.8, killsLabel.Size.Y.Offset)
+        popup.Position = restingPosition - UDim2.fromScale(0, 0.55)
+        popup.Parent = killsLabel.Parent
+        TweenService:Create(popup, popupTweenInfo, { Position = restingPosition - UDim2.fromScale(0, 1.15) }):Play()
+        TweenService:Create(popup, popupFadeInfo, { TextTransparency = 1 }):Play()
+        local popupStroke = popup:FindFirstChildOfClass("UIStroke")
+        if popupStroke then
+            popupStroke.Transparency = 0
+            TweenService:Create(popupStroke, popupFadeInfo, { Transparency = 1 }):Play()
+        end
+        Debris:AddItem(popup, 1.5)
+    end
+
+    local function runCounter()
+        if isCounting then
+            return
+        end
+        isCounting = true
+        killsLabel.TextColor3 = gainColor
+        while displayedKills ~= targetKills do
+            local remaining = targetKills - displayedKills
+            local stepSize = math.max(1, math.ceil(math.abs(remaining) / 6))
+            displayedKills += remaining > 0 and stepSize or -stepSize
+            flipTo(tostring(displayedKills))
+            task.wait(stepSize > 1 and 0.045 or 0.075)
+        end
+        isCounting = false
+        TweenService:Create(killsLabel, TweenInfo.new(0.4), { TextColor3 = restingColor }):Play()
+    end
+
+    killsValue.Changed:Connect(function(newValue)
+        newValue = math.floor(newValue)
+        local gained = newValue - targetKills
+        targetKills = newValue
+        if gained > 0 then
+            showGain(gained)
+            task.spawn(runCounter)
+        else
+            displayedKills = newValue
+            killsLabel.Text = tostring(newValue)
+        end
+    end)
+
+    if targetKills > 0 then
+        task.spawn(runCounter)
+    end
+end)
 end)
 
 
@@ -7652,13 +8310,14 @@ task.spawn(function()
     }
 
     local function render()
+        local spawnGate = HudSpawnGate or 1
         for k = 1, 3 do
             local l = layers[k]
             if l then
                 local on = k <= LAYERS
                 -- layer 1 is the bottom third of health, layer LAYERS is the top; top empties first
-                local f = on and math.clamp(state.front * LAYERS - (k - 1), 0, 1) or 0
-                local t = on and math.clamp(state.trail * LAYERS - (k - 1), 0, 1) or 0
+                local f = on and math.clamp(state.front * spawnGate * LAYERS - (k - 1), 0, 1) or 0
+                local t = on and math.clamp(state.trail * spawnGate * LAYERS - (k - 1), 0, 1) or 0
                 if l.fill then l.fill.Offset = toOffset(f) end
                 if l.trail then l.trail.Offset = toOffset(t) end
             end
@@ -7696,10 +8355,13 @@ task.spawn(function()
     end
 
     -- ===== ANIMATION LOOP =====
+    local renderedGate = 1
     RunService.RenderStepped:Connect(function(dt)
-        if state.front == state.target and state.trail == state.front then
+        local spawnGate = HudSpawnGate or 1
+        if spawnGate == renderedGate and state.front == state.target and state.trail == state.front then
             return -- at rest, nothing to do
         end
+        renderedGate = spawnGate
 
         -- main bar chases real health (exponential ease = fast start, soft landing)
         local diff = state.target - state.front
